@@ -1,0 +1,12 @@
+# Ronintech repos cloned by `boyd onboard` under $BOYD_WORK_ROOT (default ~/work/ronintech).
+# Format: directory-name  github-repo-name  required(1|0)
+# required=1 blocks onboard on failure; optional repos are skipped if missing access.
+workspace  workspace  0
+boyd  boyd  1
+boyd-data  boyd-data  1
+boyd-infra  boyd-infra  1
+boyd-pipelines  boyd-pipelines  1
+tacticalmaps-nawdc  tacticalmaps-nawdc  0
+signal-vertex-3e9c  signal-vertex-3e9c  0
+slack-cursor-mcp  slack-cursor-mcp  0
+cmmc  cmmc  0

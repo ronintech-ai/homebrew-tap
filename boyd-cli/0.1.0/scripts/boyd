@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# boyd: one entry point for Boyd environments on a Mac.
+#
+#   boyd onboard            GitHub preflight, clone repos, then setup (new engineers)
+#   boyd github             check GitHub SSH + org access only
+#   boyd setup              set up or refresh access (SSO, kubectl, VPN, CA trust), installs `boyd`
+#   boyd status             check access, change nothing
+#   boyd vpn <staging|prod> open the VPN client and wait until the cluster answers
+#   boyd kube <env>         switch kubectl context (demo, staging, prod)
+#   boyd argo <env> [login] open Argo CD; `login` also runs the argocd CLI login
+#   boyd argo demo password copy the demo Argo admin password to the clipboard
+#   boyd open <env>         open the Boyd app
+#   boyd preview <pr>       port-forward PR <pr>'s preview on demo and open it
+#   boyd previews           list live previews
+#   boyd up|reload|down|logs|local-status   local kind cluster for the boyd checkout you're in
+#   boyd promote            fast-forward boyd main to staging (prod release is still manual)
+#
+# Local and preview commands run the boyd repo's justfile: the checkout you're in if it's a boyd
+# repo, else $BOYD_REPO (default ~/work/ronintech/boyd).
+set -euo pipefail
+
+self="${BASH_SOURCE[0]}"
+while [[ -L $self ]]; do
+  link=$(readlink "$self")
+  [[ $link == /* ]] && self=$link || self="$(dirname "$self")/$link"
+done
+SCRIPTS="$(cd "$(dirname "$self")" && pwd)"
+SETUP="$SCRIPTS/rt-setup.sh"
+
+# shellcheck source=boyd-onboard.sh
+source "$SCRIPTS/boyd-onboard.sh"
+
+unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+
+die() { printf 'boyd: %s\n' "$*" >&2; exit 1; }
+usage() { sed -n '2,19p' "$self" | sed 's/^# \{0,1\}//'; }
+
+env_arg() {
+  case "${1:-}" in
+    demo | staging | prod) echo "$1" ;;
+    "") die "which env? demo, staging, or prod" ;;
+    *) die "unknown env '$1' (demo, staging, prod)" ;;
+  esac
+}
+
+api_up() { kubectl --context "$1" --request-timeout=5s get --raw /readyz >/dev/null 2>&1; }
+
+need_api() {
+  local env=$1
+  api_up "$env" && return
+  if [[ $env == demo ]]; then
+    die "can't reach the demo cluster. Run: boyd setup"
+  fi
+  die "can't reach $env. Connect the VPN first: boyd vpn $env"
+}
+
+lb_host() { kubectl --context demo -n "$1" get svc "$2" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'; }
+
+boyd_repo() {
+  local top
+  if top=$(git rev-parse --show-toplevel 2>/dev/null) &&
+    git -C "$top" remote get-url origin 2>/dev/null | grep -qE 'ronintech-ai/boyd(\.git)?$'; then
+    echo "$top"
+  else
+    local repo="${BOYD_REPO:-$HOME/work/ronintech/boyd}"
+    [[ -f $repo/justfile ]] || die "no boyd checkout at $repo (set BOYD_REPO or cd into one)"
+    echo "$repo"
+  fi
+}
+
+run_just() {
+  local repo
+  repo=$(boyd_repo)
+  command -v just >/dev/null || die "just is missing: brew install just"
+  echo "boyd: $(git -C "$repo" branch --show-current 2>/dev/null || echo detached) in $repo" >&2
+  exec just --justfile "$repo/justfile" --working-directory "$repo" "$@"
+}
+
+cmd_install() {
+  if boyd_from_brew 2>/dev/null; then
+    echo "boyd installed via Homebrew ($(brew --prefix boyd))"
+    return
+  fi
+  local bin
+  bin="$(brew --prefix 2>/dev/null)/bin"
+  [[ -d $bin && -w $bin ]] || { bin="$HOME/.local/bin"; mkdir -p "$bin"; }
+  ln -sf "$SCRIPTS/boyd" "$bin/boyd"
+  echo "boyd -> $bin/boyd"
+  [[ ":$PATH:" == *":$bin:"* ]] || echo "add $bin to your PATH"
+  local rc="$HOME/.zshrc"
+  if [[ -f $rc ]] && grep -q '^alias rt-setup=' "$rc"; then
+    sed -i '' -e '/^alias rt-setup=/d' -e '\|^# Boyd env access (boyd-infra scripts/rt-setup.sh)$|d' "$rc"
+    echo "removed the old rt-setup alias from ~/.zshrc"
+  fi
+}
+
+cmd_vpn() {
+  local env
+  env=$(env_arg "${1:-}")
+  [[ $env == demo ]] && { echo "demo has no VPN, it's public"; return; }
+  if api_up "$env"; then echo "$env: connected"; return; fi
+  open -a "AWS VPN Client" || die "AWS VPN Client missing. Run: boyd setup"
+  echo "In AWS VPN Client pick boyd-$env, Connect, and finish the Entra login in the browser."
+  printf 'waiting for the %s cluster' "$env"
+  for _ in $(seq 60); do
+    if api_up "$env"; then printf '\n%s: connected\n' "$env"; return; fi
+    printf '.'
+    sleep 3
+  done
+  printf '\n'
+  die "$env still unreachable after 3 minutes. Refused at connect usually means Entra group or app assignment."
+}
+
+cmd_kube() {
+  local env
+  env=$(env_arg "${1:-}")
+  kubectl config use-context "$env" >/dev/null || die "no context '$env'. Run: boyd setup"
+  if [[ $env == prod ]]; then
+    printf '\033[1;31mkubectl now points at PROD.\033[0m Switch back with: boyd kube staging\n'
+  else
+    echo "kubectl -> $env"
+  fi
+  api_up "$env" || echo "(not reachable right now$([[ $env != demo ]] && echo ", run: boyd vpn $env"))"
+}
+
+cmd_argo() {
+  local env action=${2:-}
+  env=$(env_arg "${1:-}")
+  if [[ $env == demo ]]; then
+    need_api demo
+    if [[ $action == password ]]; then
+      kubectl --context demo -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' |
+        base64 -d | pbcopy
+      echo "demo Argo admin password copied to the clipboard (user: admin)"
+      return
+    fi
+    local host
+    host=$(lb_host argocd argocd-server)
+    echo "http://$host  (user admin, password: boyd argo demo password)"
+    open "http://$host"
+    return
+  fi
+  need_api "$env"
+  local host="argocd.$env.boyd.internal"
+  echo "https://$host  (Log in via Entra ID)"
+  open "https://$host"
+  if [[ $action == login ]]; then
+    command -v argocd >/dev/null || die "argocd CLI missing: brew install argocd"
+    argocd login "$host" --sso --grpc-web
+  fi
+}
+
+cmd_open() {
+  local env
+  env=$(env_arg "${1:-}")
+  if [[ $env == demo ]]; then
+    need_api demo
+    local host
+    host=$(lb_host boyd boyd)
+    echo "http://$host"
+    open "http://$host"
+    return
+  fi
+  need_api "$env"
+  echo "https://boyd.$env.boyd.internal"
+  open "https://boyd.$env.boyd.internal"
+}
+
+cmd="${1:-help}"
+shift || true
+case "$cmd" in
+  onboard) cmd_onboard ;;
+  github) cmd_github ;;
+  setup) "$SETUP" setup && cmd_install ;;
+  status) exec "$SETUP" status ;;
+  install) cmd_install ;;
+  vpn) cmd_vpn "$@" ;;
+  kube | ctx) cmd_kube "$@" ;;
+  argo) cmd_argo "$@" ;;
+  open) cmd_open "$@" ;;
+  preview) [[ -n ${1:-} ]] || die "usage: boyd preview <pr number>"; run_just preview "$1" ;;
+  previews) run_just preview-list ;;
+  up | reload | down | logs) run_just "$cmd" ;;
+  local-status) run_just status ;;
+  promote) run_just promote "$@" ;;
+  help | -h | --help) usage ;;
+  *) usage; exit 2 ;;
+esac
