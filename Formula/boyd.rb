@@ -1,6 +1,8 @@
 class Boyd < Formula
   desc "Boyd environment CLI for Ronintech engineers"
   homepage "https://github.com/ronintech-ai/boyd-infra"
+  url "https://github.com/ronintech-ai/homebrew-tap/archive/refs/tags/boyd-cli-0.1.0.tar.gz"
+  sha256 "579911d114a10f3fb1bd15370d3a7425ea94933e58d0c9586dd859f24f318633"
   version "0.1.0"
   license "MIT"
 
@@ -15,7 +17,7 @@ class Boyd < Formula
   depends_on "git"
 
   def install
-    pkg = Pathname(__dir__).join("..", "boyd-cli", version.to_s, "scripts")
+    pkg = buildpath.join("boyd-cli", version.to_s, "scripts")
     odie "missing vendored scripts at #{pkg}" unless pkg.directory?
 
     libexec.install pkg.children
