@@ -8,6 +8,8 @@ boyd github
 boyd onboard
 ```
 
-Homebrew names this tap `ronintech-ai/tap` (from the `homebrew-tap` repo name). First install on a machine may require `brew trust ronintech-ai/tap`.
+Homebrew names this tap `ronintech-ai/tap` (from the `homebrew-tap` repo name).
 
-CLI scripts are vendored under `boyd-cli/<version>/` from [boyd-infra](https://github.com/ronintech-ai/boyd-infra) tags (`packaging/VERSION`).
+If `/opt/homebrew/bin/boyd` already points at a dev symlink: `brew link --overwrite boyd`.
+
+CLI scripts are vendored under `boyd-cli/<version>/` from tagged [boyd-infra](https://github.com/ronintech-ai/boyd-infra) releases (`packaging/VERSION`).
