@@ -2,7 +2,7 @@ class Boyd < Formula
   desc "Boyd environment CLI for Ronintech engineers"
   homepage "https://github.com/ronintech-ai/boyd-infra"
   url "https://github.com/ronintech-ai/homebrew-tap/archive/refs/tags/boyd-cli-0.1.0.tar.gz"
-  sha256 "303d059382e1125bfef3b76cd107d56f49ae233a7167fe76af92aa7caa4085ab"
+  sha256 "6482864c976520cf42037cfa58573ddab0fe7693f34db31dd6c4d6754bf1dfd5"
   version "0.1.0"
   license "MIT"
 
